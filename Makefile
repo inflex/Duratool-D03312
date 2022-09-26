@@ -8,7 +8,7 @@ BV=$(shell (git rev-list HEAD --count))
 BD=$(shell (date))
 
 LOCATION=/usr/local
-CFLAGS=-O0 -ggdb  -DBUILD_VER="$(BV)"  -DBUILD_DATE=\""$(BD)"\" -DFAKE_SERIAL=$(FAKE_SERIAL)
+CFLAGS=-O2 -DBUILD_VER="$(BV)"  -DBUILD_DATE=\""$(BD)"\" -DFAKE_SERIAL=$(FAKE_SERIAL)
 SDLFLAGS=$(shell (sdl2-config --static-libs --cflags))
 LIBS=-lSDL2_ttf
 OBJ=duratool
