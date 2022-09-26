@@ -9,7 +9,12 @@ BD=$(shell (date))
 
 LOCATION=/usr/local
 CFLAGS=-O -DBUILD_VER="$(BV)"  -DBUILD_DATE=\""$(BD)"\" -DFAKE_SERIAL=$(FAKE_SERIAL)
-LIBS=
+SDLFLAGS=$(shell (sdl2-config --static-libs --cflags))
+LIBS=-lSDL2_ttf
+OBJ=duratool
+CC=gcc
+GCC=g++
+
 WINLIBS=-lgdi32 -lcomdlg32 -lcomctl32 -lmingw32
 WINCC=i686-w64-mingw32.static-g++
 # -fpermissive is needed to stop the warnings about casting stoppping the build
@@ -17,28 +22,33 @@ WINCC=i686-w64-mingw32.static-g++
 #WINFLAGS=-municode -static-libgcc -fpermissive -static-libstdc++
 WINFLAGS=-municode -static-libgcc -static-libstdc++
 
-WINOBJ=Duratool-D03312.exe
+WINOBJ=duratool.exe
 OFILES=
 
 default: 
 	@echo
-	@echo "   To make a GUI; make Duratool-D03312"
-	@echo "   To make a GUI test;  export FAKE_SERIAL=1 && make Duratool-D03312"
+	@echo "   To make for Windows, 'make win'
+	@echo "   To make for linux, 'make linux'
 	@echo
 
-default: Duratool-D03312
 
 .c.o:
 	${CC} ${CFLAGS} $(COMPONENTS) -c $*.c
 
 all: ${OBJ} 
 
-Duratool-D03312: ${OFILES} Duratool-D03312.cpp 
+linux:
+	@echo Build Release $(BV)
+	@echo Build Date $(BD)
+	${GCC} ${CFLAGS} $(COMPONENTS) Duratool-D03312-sdl2.cpp $(SDLFLAGS) $(LIBS) ${OFILES} -o ${OBJ} 
+
+
+win: ${OFILES}
 	@echo Build Release $(BV)
 	@echo Build Date $(BD)
 #	ctags *.[ch]
 #	clear
-	${WINCC} ${CFLAGS} ${WINFLAGS} $(COMPONENTS) Duratool-D03312.cpp ${OFILES} -o Duratool-D03312.exe ${LIBS} ${WINLIBS}
+	${WINCC} ${CFLAGS} ${WINFLAGS} $(COMPONENTS) Duratool-D03312-win.cpp ${OFILES} -o ${WINOBJ} ${LIBS} ${WINLIBS}
 
 strip: 
 	strip *.exe
