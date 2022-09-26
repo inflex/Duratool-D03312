@@ -61,7 +61,7 @@
 #define PORT_CANT_SET 12
 #define PORT_NO_SUCCESS -1
 
-
+char default_mmdata_file[] = "mmdata.txt";
 char default_serial_config[] = "9600:8n1";
 
 struct serial_params_s {
@@ -188,7 +188,7 @@ void show_help(void) {
 			"\t-h: This help\r\n"
 			"\t-p <comport>: Set the com port for the meter, eg: -p /dev/ttyUSB0\r\n"
 			"\t-s <[9600|4800|2400|1200]:[7|8][o|e|n][1|2]>, eg: -s 2400:8n1\r\n"
-			"\t-o <output file> ( used by FlexBV to read the data )\r\n"
+			"\t-om [<path>] ( used by FlexBV to read the data, default is current folder )\r\n"
 			"\t-d: debug enabled\r\n"
 			"\t-q: quiet output\r\n"
 			"\t-v: show version\r\n"
@@ -197,7 +197,7 @@ void show_help(void) {
 			"\t-bc <background colour, 101010>\r\n"
 			"\r\n"
 			"\r\n"
-			"\texample: bside-adm20 -p /dev/ttyUSB0\r\n"
+			"\texample: duratool -p /dev/ttyUSB0\r\n"
 			, BUILD_VER
 			, BUILD_DATE 
 			);
@@ -265,12 +265,17 @@ int parse_parameters(struct glb *g, int argc, char **argv ) {
 					 * line containing the information FlexBV will want 
 					 *
 					 */
+					g->output_file = default_mmdata_file;
 					i++;
 					if (i < argc) {
-						g->output_file = argv[i];
-					} else {
-						fprintf(stderr,"Insufficient parameters; -o <output file>\n");
-						exit(1);
+						/*
+						 * If the paramter has a filename to override the default
+						 *
+						 */
+						if (argv[i][0] != '-') {
+							g->output_file = argv[i];
+							i++;
+						}
 					}
 					break;
 
