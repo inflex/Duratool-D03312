@@ -1,5 +1,5 @@
 /*
- * BSIDE-ADM20 helper for FlexBV
+ * Duratool OSD helper for FlexBV
  *
  * V0.1 - October 4, 2018
  * 
@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -53,10 +54,18 @@
 #define dd "\u00B0"
 #define oo "\u03A9"
 
+
+#define PORT_OK 0
+#define PORT_CANT_LOCK 10
+#define PORT_INVALID 11
+#define PORT_CANT_SET 12
+#define PORT_NO_SUCCESS -1
+
+
 char default_serial_config[] = "9600:8n1";
 
 struct serial_params_s {
-	char *device;
+	char device[4096];
 	int fd, n;
 	int cnt, size, s_cnt;
 	struct termios oldtp, newtp;
@@ -170,7 +179,7 @@ int init(struct glb *g) {
 }
 
 void show_help(void) {
-	fprintf(stderr,"BSIDE ADM20 Multimeter decoder helper for FlexBV\r\n"
+	fprintf(stderr,"Duratool Multimeter decoder helper for FlexBV\r\n"
 			"By Paul L Daniels / pldaniels@gmail.com\r\n"
 			"Build %d / %s\r\n"
 			"\r\n"
@@ -216,11 +225,6 @@ Changes:
 int parse_parameters(struct glb *g, int argc, char **argv ) {
 	int i;
 
-	if (argc == 1) {
-		show_help();
-		exit(1);
-	}
-
 	for (i = 0; i < argc; i++) {
 		if (argv[i][0] == '-') {
 			/* parameter */
@@ -248,7 +252,7 @@ int parse_parameters(struct glb *g, int argc, char **argv ) {
 					 */
 					i++;
 					if (i < argc) {
-						g->serial_params.device = argv[i];
+						snprintf(g->serial_params.device, sizeof(g->serial_params.device), "%s", argv[i]);
 					} else {
 						fprintf(stderr,"Insufficient parameters; -p <com port>\n");
 						exit(1);
@@ -328,39 +332,118 @@ int parse_parameters(struct glb *g, int argc, char **argv ) {
 
 
 /*
- * Default parameters are 2400:8n1, given that the multimeter
- * is shipped like this and cannot be changed then we shouldn't
- * have to worry about needing to make changes, but we'll probably
- * add that for future changes.
- *
  * 20210804: Duratool D03122 is configured as 9600:8n1, so we now
  * have to add the adjustable serial config facility
  *
  */
-void open_port(struct serial_params_s *s, char *serial_config ) {
-	int r; 
 
-	s->fd = open( s->device, O_RDWR | O_NOCTTY |O_NDELAY );
-	if (s->fd <0) {
-		perror( s->device );
-	}
+int open_port(struct serial_params_s *s) {
+	 int r; 
 
-	fcntl(s->fd,F_SETFL,0);
-	tcgetattr(s->fd,&(s->oldtp)); // save current serial port settings 
-	tcgetattr(s->fd,&(s->newtp)); // save current serial port settings in to what will be our new settings
-	cfmakeraw(&(s->newtp));
-	s->newtp.c_cflag = CS8 |  CREAD | CRTSCTS ; // Adjust the settings to suit our BSIDE-ADM20 / 2400-8n1
-	if (strstr(serial_config,"1200")) s->newtp.c_cflag |= B2400;
-	else if (strstr(serial_config,"2400")) s->newtp.c_cflag |= B2400;
-	else if (strstr(serial_config,"4800")) s->newtp.c_cflag |= B4800;
-	else if (strstr(serial_config,"9600")) s->newtp.c_cflag |= B9600;
+	 s->fd = open( s->device, O_RDWR | O_NOCTTY |O_NDELAY );
+	 if (s->fd <0) {
+		  return PORT_INVALID;
+		  perror( s->device );
+	 }
 
-	r = tcsetattr(s->fd, TCSANOW, &(s->newtp));
-	if (r) {
-		fprintf(stderr,"%s:%d: Error setting terminal (%s)\n", FL, strerror(errno));
-		exit(1);
-	}
+	 r = flock(s->fd, LOCK_EX | LOCK_NB);
+	 if (r == -1) {
+		  fprintf(stderr, "%s:%d: Unable to set lock on %s, Error '%s'\n", FL, s->device, strerror(errno) );
+		  return PORT_CANT_LOCK;
+	 }
+	 if (r == 0) {
+		  fcntl(s->fd,F_SETFL,0);
+		  tcgetattr(s->fd,&(s->oldtp)); // save current serial port settings 
+		  tcgetattr(s->fd,&(s->newtp)); // save current serial port settings in to what will be our new settings
+		  cfmakeraw(&(s->newtp));
+		  s->newtp.c_cflag = B9600 | CS8 |  CREAD | CRTSCTS ; // Adjust the settings to suit our meter
+
+		  r = tcsetattr(s->fd, TCSANOW, &(s->newtp));
+		  if (r) {
+				fprintf(stderr,"%s:%d: Error setting terminal (%s)\n", FL, strerror(errno));
+				return PORT_CANT_SET;
+				//								exit(1);
+		  }
+	 }
+	 return PORT_OK;
 }
+
+/*
+ * Default parameters are 9600:8n1, given that the multimeter
+ * is shipped like this and cannot be changed then we shouldn't
+ * have to worry about needing to make changes, but we'll probably
+ * add that for future changes.
+ *
+ */
+
+
+int find_port( struct serial_params_s *s ) {
+
+	 for ( int port_number = 0; port_number < 10; port_number++ ) {
+		  snprintf(s->device, sizeof(s->device), "/dev/ttyUSB%d", port_number);
+		  fprintf(stderr,"\nTesting port %s\n", s->device);
+		  int r = open_port( s );
+		  if (r == PORT_OK ) {
+				int frame_size_count_started = 0;
+				int end_of_frame_received = 0;
+				int frame_size = 0;
+				int bytes_read = 0;
+				char serial_buffer[100];
+				fd_set set;
+				struct timeval timeout;
+
+				FD_ZERO(&set);
+				FD_SET(s->fd, &set);
+
+				timeout.tv_sec = 1;
+				timeout.tv_usec = 200000;
+
+				do {
+					 uint8_t temp_char = 0;
+					 int rv;
+
+					 bytes_read = 0;
+					 rv = select(s->fd +1, &set, NULL, NULL, &timeout);
+					 if (rv == -1) {
+						  break;
+					 } else if (rv == 0 ) {
+						  break;
+					 } else bytes_read = read(s->fd, &temp_char, 1);
+
+					 if (bytes_read > 0) {
+						 fprintf(stderr,"%02x ", temp_char);
+						  if (temp_char == 0xAA) {
+							  fprintf(stderr,"Delimiter found (0xAA)\n");
+								if (frame_size_count_started == 0) {
+									 frame_size_count_started = 1;
+									 frame_size = 1;
+									 fprintf(stderr,"Frame count started...\n");
+								} else {
+									 end_of_frame_received = 1;
+									 fprintf(stderr,"Frame size = %d\n", frame_size);
+									 break;
+								}
+						  } else {
+								if (frame_size_count_started) frame_size++;
+						  }
+					 }
+				} while ((bytes_read > 0) && (frame_size < sizeof(serial_buffer)) && (!end_of_frame_received));
+				if (frame_size == DATA_FRAME_SIZE) {
+					 fprintf(stderr,"Port %s selected\n", s->device);
+					close(s->fd);
+					 return PORT_OK;
+				}
+
+				close(s->fd);
+		  } // port OK
+	 } // for each port
+	 return PORT_NO_SUCCESS;
+}
+
+
+
+
+
 
 uint8_t a2h( uint8_t a ) {
 	a -= 0x30;
@@ -427,10 +510,19 @@ int main ( int argc, char **argv ) {
 
 	if (g.output_file) snprintf(tfn,sizeof(tfn),"%s.tmp",g.output_file);
 
+
+
+	 int find_port_result = find_port(&g.serial_params);
+	 if (find_port_result != PORT_OK) {
+		  fprintf(stderr,"Unable to locate port with valid device\n");
+		  exit(1);
+	 }
+
+
 	/*
 	 * Handle the COM Port
 	 */
-	open_port(&g.serial_params, g.serial_config);
+	open_port(&g.serial_params );
 
 	/*
 	 * Setup SDL2 and fonts
@@ -453,7 +545,7 @@ int main ( int argc, char **argv ) {
 	if (g.wx_forced) g.window_width = g.wx_forced;
 	if (g.wy_forced) g.window_height = g.wy_forced;
 
-	SDL_Window *window = SDL_CreateWindow("BSIDE ADM20", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, g.window_width, g.window_height, 0);
+	SDL_Window *window = SDL_CreateWindow("Duratool", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, g.window_width, g.window_height, 0);
 	SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, 0);
 	if (!font) {
 		fprintf(stderr,"Error trying to open font :( \r\n");
@@ -679,25 +771,24 @@ int main ( int argc, char **argv ) {
 
 			SDL_RenderClear(renderer);
 
-			surface = TTF_RenderUTF8_Solid(font, line1, g.font_color);
+			surface = TTF_RenderUTF8_Blended(font, line1, g.font_color);
 			texture = SDL_CreateTextureFromSurface(renderer, surface);
 			SDL_QueryTexture(texture, NULL, NULL, &texW, &texH);
 			SDL_Rect dstrect = { 0, 0, texW, texH };
 			SDL_RenderCopy(renderer, texture, NULL, &dstrect);
+			SDL_DestroyTexture(texture);
+			SDL_FreeSurface(surface);
 			line2h = texH;
 
-			auto surface2 = TTF_RenderUTF8_Solid(font_small, line2, g.font_color);
-			auto texture2 = SDL_CreateTextureFromSurface(renderer, surface2);
-			SDL_QueryTexture(texture2, NULL, NULL, &texW, &texH);
+			surface = TTF_RenderUTF8_Blended(font_small, line2, g.font_color);
+			texture = SDL_CreateTextureFromSurface(renderer, surface);
+			SDL_QueryTexture(texture, NULL, NULL, &texW, &texH);
 			dstrect = { 0, line2h, texW, texH };
-			SDL_RenderCopy(renderer, texture2, NULL, &dstrect);
-
+			SDL_RenderCopy(renderer, texture, NULL, &dstrect);
+			SDL_DestroyTexture(texture);
+			SDL_FreeSurface(surface);
 
 			SDL_RenderPresent(renderer);
-			SDL_DestroyTexture(texture);
-			SDL_DestroyTexture(texture2);
-			SDL_FreeSurface(surface);
-			SDL_FreeSurface(surface2);
 
 		}
 
@@ -744,8 +835,6 @@ int main ( int argc, char **argv ) {
 
 	if (g.serial_params.fd) close(g.serial_params.fd);
 
-	SDL_DestroyTexture(texture);
-	SDL_FreeSurface(surface);
 	TTF_CloseFont(font);
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);
